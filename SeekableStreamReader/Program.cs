@@ -44,7 +44,12 @@ namespace SeekableStreamReader {
         /// </summary>
         private int[] m_charEncodePos;
 
-        
+        /// <summary>
+        /// Holds the data in character form
+        /// </summary>
+        private char[] m_dataBuffer;
+
+
         public int M_StartBytePosition {
             get => m_startBytePosition;
             set => m_startBytePosition = value;
@@ -79,12 +84,16 @@ namespace SeekableStreamReader {
             get => m_charEncodePos;
             set => m_charEncodePos = value;
         }
+        public char[] M_DataBuffer {
+            get => m_dataBuffer;
+            set => m_dataBuffer = value;
+        }
 
-        bool IsByteIndexInRange(int index) {
+        public bool IsByteIndexInRange(int index) {
             return index >= m_startBytePosition && (index <= m_endBytePosition ? true : false);
         }
 
-        bool IsCharIndexInRange(int index){
+        public bool IsCharIndexInRange(int index){
             return index >= m_startCharacterIndex && (index <= m_endCharacterIndex ? true : false);
         }
     }
@@ -222,10 +231,33 @@ namespace SeekableStreamReader {
         public char this[int index] {
             get {
                 if (!m_mappingAcknowledge || !CharacterIndexInBuffer(index)) {
-                    ReadDataIntoBuffer(m_bufferWindows.Last().M_EndBytePosition+1);
+                    //ReadDataIntoBuffer(m_bufferWindows.Last().M_EndBytePosition+1);
+                    WhereToReadNextInStream(index);
                 }
 
                 return m_dataBuffer[index-m_bufferStart];
+            }
+        }
+
+        /// <summary>
+        /// Given a character index in the stream the method identifies the
+        /// segment in the stream where the requested character resides by
+        /// either looking forward or in reverse.
+        /// </summary>
+        /// <param name="index">Index of character to access</param>
+        protected void WhereToReadNextInStream(int index) {
+            if (index > m_bufferWindows.Last().M_EndCharacterIndex) {
+                while ( !m_bufferWindows.Last().IsCharIndexInRange(index) ) {
+                    ReadDataIntoBuffer(m_bufferWindows.Last().M_EndBytePosition + 1);
+                }
+            }
+            else if ( index < m_bufferWindows.Last().M_StartCharacterIndex) {
+                foreach (BufferWindowRecord record in Enumerable.Reverse(m_bufferWindows)) {
+                    if (record.IsCharIndexInRange(index)) {
+                        ReadDataIntoBuffer(record.M_StartBytePosition);
+                        break;
+                    }
+                }
             }
         }
 
@@ -268,9 +300,9 @@ namespace SeekableStreamReader {
             // 4. Read the stream while buffer is full and end of file is not reached
             // Meanwhile decode the bytes to characters into the buffer
             i_bufsz = 0;
-            bindex = bstart = m_bufferStart;
+            bindex = bstart = m_bufferStart = bPosition;
             cindex = 0;
-            while (i_bufsz < m_bufferSize && (bt=m_istream.ReadByte())!=-1) {
+            while (cindex < m_bufferSize && (bt=m_istream.ReadByte())!=-1) {
                 byteBuffer[0] = (byte) bt; // read the character code as integer and cast it to byte
                 charactersDecoded = decoder.GetChars(byteBuffer, 0, 1, charBuffer, 0); // decode
                 if (charactersDecoded != 0) {
@@ -292,10 +324,12 @@ namespace SeekableStreamReader {
                 M_EndCharacterIndex = m_bufferWindows.Count != 0 ? m_bufferWindows.Last().M_EndCharacterIndex + cindex:cindex,
                 M_WindowSize = cindex,
                 M_CharEncodePos = m_charEncodePos,
-                M_CharEncodeLength = m_charEncodeLength
+                M_CharEncodeLength = m_charEncodeLength,
+                M_DataBuffer = m_dataBuffer
             };
             m_bufferWindows.Add(rec);
 
+            Console.WriteLine(m_dataBuffer);
         }
 
         public Encoding GetEncoding() {
@@ -508,6 +542,9 @@ namespace SeekableStreamReader {
                 FileMode.Open),128,Encoding.UTF8);
             bStreamReader.ReadDataIntoBuffer(0);
             Console.WriteLine(bStreamReader[2]);
+            Console.WriteLine(bStreamReader[200]);
+            Console.WriteLine(bStreamReader[2]);
+
         }
     }
 }
