@@ -7,10 +7,96 @@ using System.Threading.Tasks;
 
 namespace SeekableStreamReader {
 
+    public class BufferWindowRecord {
+        /// <summary>
+        /// Index of first window byte in the underlying stream
+        /// </summary>
+        private int m_startBytePosition;
+        /// <summary>
+        /// Index of last window byte in the underlying stream
+        /// </summary>
+        private int m_endBytePosition;
+        /// <summary>
+        /// Index of first window character in the underlying stream
+        /// </summary>
+        private int m_startCharacterIndex;
+        /// <summary>
+        /// Index of last window character in the underlying stream
+        /// </summary>
+        private int m_endCharacterIndex;
+        /// <summary>
+        /// Window Size in characters
+        /// </summary>
+        private int m_windowSize;
+        /// <summary>
+        ///  The unicode character encoding requires not a fixed number of
+        ///  bytes for each character
+        ///  The array holds the bytes required to encoded each character
+        ///  in sequence in the input stream. The i-th entry gives the number
+        ///  of bytes to encode the i-th character. 
+        /// </summary>
+        private int[] m_charEncodeLength;
+
+        /// <summary>
+        /// The array holds the position in the input stream for which each
+        /// character starts its encoding. The i-th entry of the array gives
+        /// the position in the byte stream for which the i-th character starts
+        /// </summary>
+        private int[] m_charEncodePos;
+
+        
+        public int M_StartBytePosition {
+            get => m_startBytePosition;
+            set => m_startBytePosition = value;
+        }
+
+        public int M_EndBytePosition {
+            get => m_endBytePosition;
+            set => m_endBytePosition = value;
+        }
+
+        public int M_StartCharacterIndex {
+            get => m_startCharacterIndex;
+            set => m_startCharacterIndex = value;
+        }
+
+        public int M_EndCharacterIndex {
+            get => m_endCharacterIndex;
+            set => m_endCharacterIndex = value;
+        }
+
+        public int M_WindowSize {
+            get => m_windowSize;
+            set => m_windowSize = value;
+        }
+
+        public int[] M_CharEncodeLength {
+            get => m_charEncodeLength;
+            set => m_charEncodeLength = value;
+        }
+
+        public int[] M_CharEncodePos {
+            get => m_charEncodePos;
+            set => m_charEncodePos = value;
+        }
+
+        bool IsByteIndexInRange(int index) {
+            return index >= m_startBytePosition && (index <= m_endBytePosition ? true : false);
+        }
+
+        bool IsCharIndexInRange(int index){
+            return index >= m_startCharacterIndex && (index <= m_endCharacterIndex ? true : false);
+        }
+    }
+
     /// <summary>
     /// This class provides buffered random access capabilities to streams
     /// </summary>
     public class BufferedStreamTextReader {
+        /// <summary>
+        /// Holds a list of buffer windows already retrived in sequence by the stream
+        /// </summary>
+        private List<BufferWindowRecord> m_bufferWindows =new List<BufferWindowRecord>();
 
         /// <summary>
         /// The input stream for which seeking ability will be given
@@ -111,9 +197,9 @@ namespace SeekableStreamReader {
             m_streamEncoding = mStreamEncoding != null ? mStreamEncoding : GetEncoding();
             m_mappingAcknowledge = false;
             m_bufferSize = bufferSize;
-            
         }
 
+        
         /// <summary>
         /// Checks if the character index exists in the buffer
         /// </summary>
@@ -136,7 +222,7 @@ namespace SeekableStreamReader {
         public char this[int index] {
             get {
                 if (!m_mappingAcknowledge || !CharacterIndexInBuffer(index)) {
-                    ReadDataIntoBuffer();
+                    ReadDataIntoBuffer(m_bufferWindows.Last().M_EndBytePosition+1);
                 }
 
                 return m_dataBuffer[index-m_bufferStart];
@@ -150,12 +236,13 @@ namespace SeekableStreamReader {
         protected void Seek(int index) {
             m_istream.Seek(index, SeekOrigin.Begin);
             m_istream.Flush();
-        } 
+        }
 
         /// <summary>
-        /// Reads and maps data into the buffer
+        /// Reads and maps data into the buffer starting from the indicated
+        /// position measured in bytes
         /// </summary>
-        public void ReadDataIntoBuffer() {
+        public void ReadDataIntoBuffer(int bPosition) {
             int i_bufsz;
             int bstart;
             int bindex; // Holds the index of the last byte retrieved
@@ -168,14 +255,17 @@ namespace SeekableStreamReader {
             // 1. Get the decoder for the indicated encoding
             Decoder decoder = m_streamEncoding.GetDecoder();
 
-            // 2. Allocate space for the buffer if necessary
+            // 2. Set the stream at the specified position
+            Seek(bPosition);
+
+            // 3. Allocate space for the buffer if necessary
             if (m_bufferReallocationRequired) {
                 m_dataBuffer = new char[m_bufferSize];
                 m_charEncodePos = new int[m_bufferSize];
                 m_charEncodeLength = new int[m_bufferSize];
             }
 
-            // 3. Read the stream while buffer is full and end of file is not reached
+            // 4. Read the stream while buffer is full and end of file is not reached
             // Meanwhile decode the bytes to characters into the buffer
             i_bufsz = 0;
             bindex = bstart = m_bufferStart;
@@ -192,8 +282,20 @@ namespace SeekableStreamReader {
                 }
                 bindex++;
             }
-
             m_mappingAcknowledge = true;
+
+            // 5. Create new buffer record
+            BufferWindowRecord rec = new BufferWindowRecord() {
+                M_StartBytePosition = bPosition,
+                M_EndBytePosition = bindex-1,
+                M_StartCharacterIndex = m_bufferWindows.Count!=0 ?m_bufferWindows.Last().M_EndCharacterIndex+1:0,
+                M_EndCharacterIndex = m_bufferWindows.Count != 0 ? m_bufferWindows.Last().M_EndCharacterIndex + cindex:cindex,
+                M_WindowSize = cindex,
+                M_CharEncodePos = m_charEncodePos,
+                M_CharEncodeLength = m_charEncodeLength
+            };
+            m_bufferWindows.Add(rec);
+
         }
 
         public Encoding GetEncoding() {
@@ -404,7 +506,7 @@ namespace SeekableStreamReader {
             sStreamReader.CloseStream();
             BufferedStreamTextReader bStreamReader = new BufferedStreamTextReader(new FileStream("test.txt",
                 FileMode.Open),128,Encoding.UTF8);
-            bStreamReader.ReadDataIntoBuffer();
+            bStreamReader.ReadDataIntoBuffer(0);
             Console.WriteLine(bStreamReader[2]);
         }
     }
