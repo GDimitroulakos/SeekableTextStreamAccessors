@@ -208,6 +208,23 @@ namespace SeekableStreamReader {
             m_bufferSize = bufferSize;
         }
 
+        /// <summary>
+        /// Acquires  the next character from the stream and moves the
+        /// pointer to the next subsequent position in the stream
+        /// </summary>
+        /// <returns></returns>
+        public int NextChar() {
+            return this[m_streamPointer++];
+        }
+
+        /// <summary>
+        /// Acquires  the next character from the stream without moving the
+        /// pointer to the next subsequent position in the stream
+        /// </summary>
+        /// <returns></returns>
+        public int LookAhead() {
+            return this[m_streamPointer];
+        }
         
         /// <summary>
         /// Checks if the character index exists in the buffer
@@ -321,13 +338,15 @@ namespace SeekableStreamReader {
                 M_StartBytePosition = bPosition,
                 M_EndBytePosition = bindex-1,
                 M_StartCharacterIndex = m_bufferWindows.Count!=0 ?m_bufferWindows.Last().M_EndCharacterIndex+1:0,
-                M_EndCharacterIndex = m_bufferWindows.Count != 0 ? m_bufferWindows.Last().M_EndCharacterIndex + cindex:cindex,
+                M_EndCharacterIndex = m_bufferWindows.Count != 0 ? m_bufferWindows.Last().M_EndCharacterIndex + cindex:cindex-1,
                 M_WindowSize = cindex,
                 M_CharEncodePos = m_charEncodePos,
                 M_CharEncodeLength = m_charEncodeLength,
                 M_DataBuffer = m_dataBuffer
             };
             m_bufferWindows.Add(rec);
+
+            m_bufferStart = rec.M_StartCharacterIndex;
 
             Console.WriteLine(m_dataBuffer);
         }
@@ -535,12 +554,17 @@ namespace SeekableStreamReader {
 
     class Program {
         static void Main(string[] args) {
+            int ccode;
+            
             SeekableStreamTextReader sStreamReader = new SeekableStreamTextReader(new FileStream("test.txt", 
                 FileMode.Open), Encoding.UTF8);
             sStreamReader.CloseStream();
             BufferedStreamTextReader bStreamReader = new BufferedStreamTextReader(new FileStream("test.txt",
                 FileMode.Open),128,Encoding.UTF8);
             bStreamReader.ReadDataIntoBuffer(0);
+            while ((ccode= bStreamReader.NextChar()) != 0) {
+                Console.Write((char)ccode);
+            }
             Console.WriteLine(bStreamReader[2]);
             Console.WriteLine(bStreamReader[200]);
             Console.WriteLine(bStreamReader[2]);
