@@ -90,11 +90,11 @@ namespace SeekableStreamReader {
         }
 
         public bool IsByteIndexInRange(int index) {
-            return index >= m_startBytePosition && (index <= m_endBytePosition ? true : false);
+            return (index >= m_startBytePosition && index <= m_endBytePosition) ? true : false;
         }
 
         public bool IsCharIndexInRange(int index){
-            return index >= m_startCharacterIndex && (index <= m_endCharacterIndex ? true : false);
+            return ((index >= m_startCharacterIndex && index <= m_endCharacterIndex) ? true : false);
         }
     }
 
@@ -245,37 +245,47 @@ namespace SeekableStreamReader {
         /// </summary>
         /// <param name="index">Character index in the stream</param>
         /// <returns></returns>
-        public char this[int index] {
+        public int this[int index] {
             get {
+                int EOF=0;
                 if (!m_mappingAcknowledge || !CharacterIndexInBuffer(index)) {
                     //ReadDataIntoBuffer(m_bufferWindows.Last().M_EndBytePosition+1);
-                    WhereToReadNextInStream(index);
+                    EOF = WhereToReadNextInStream(index);
                 }
 
-                return m_dataBuffer[index-m_bufferStart];
+                if (EOF != -1) {
+                    return (int)(m_dataBuffer[index - m_bufferStart]);
+                }
+                else {
+                    return EOF;
+                }
             }
         }
 
         /// <summary>
         /// Given a character index in the stream the method identifies the
         /// segment in the stream where the requested character resides by
-        /// either looking forward or in reverse.
+        /// either looking forward or in reverse. The returned value indicates
+        /// whether the end of file is reached
         /// </summary>
         /// <param name="index">Index of character to access</param>
-        protected void WhereToReadNextInStream(int index) {
+        protected int WhereToReadNextInStream(int index) {
+            int EOFreached=0;
             if (index > m_bufferWindows.Last().M_EndCharacterIndex) {
-                while ( !m_bufferWindows.Last().IsCharIndexInRange(index) ) {
-                    ReadDataIntoBuffer(m_bufferWindows.Last().M_EndBytePosition + 1);
+                while ( !m_bufferWindows.Last().IsCharIndexInRange(index) && !(EOFreached== -1)) {
+                    EOFreached = ReadDataIntoBuffer(m_bufferWindows.Last().M_EndBytePosition + 1,m_bufferWindows.Last().M_EndCharacterIndex+1);
                 }
             }
             else if ( index < m_bufferWindows.Last().M_StartCharacterIndex) {
                 foreach (BufferWindowRecord record in Enumerable.Reverse(m_bufferWindows)) {
                     if (record.IsCharIndexInRange(index)) {
-                        ReadDataIntoBuffer(record.M_StartBytePosition);
+                        ReadDataIntoBuffer(record.M_StartBytePosition,record.M_StartCharacterIndex);
                         break;
                     }
                 }
             }
+
+            return EOFreached;
         }
 
         /// <summary>
@@ -289,9 +299,10 @@ namespace SeekableStreamReader {
 
         /// <summary>
         /// Reads and maps data into the buffer starting from the indicated
-        /// position measured in bytes
+        /// position measured in bytes and in characters. The returned value
+        /// indicates whether the file end is reached
         /// </summary>
-        public void ReadDataIntoBuffer(int bPosition) {
+        public int ReadDataIntoBuffer(int bPosition,int cPosition) {
             int i_bufsz;
             int bstart;
             int bindex; // Holds the index of the last byte retrieved
@@ -331,24 +342,31 @@ namespace SeekableStreamReader {
                 }
                 bindex++;
             }
+            
             m_mappingAcknowledge = true;
 
-            // 5. Create new buffer record
-            BufferWindowRecord rec = new BufferWindowRecord() {
-                M_StartBytePosition = bPosition,
-                M_EndBytePosition = bindex-1,
-                M_StartCharacterIndex = m_bufferWindows.Count!=0 ?m_bufferWindows.Last().M_EndCharacterIndex+1:0,
-                M_EndCharacterIndex = m_bufferWindows.Count != 0 ? m_bufferWindows.Last().M_EndCharacterIndex + cindex:cindex-1,
-                M_WindowSize = cindex,
-                M_CharEncodePos = m_charEncodePos,
-                M_CharEncodeLength = m_charEncodeLength,
-                M_DataBuffer = m_dataBuffer
-            };
-            m_bufferWindows.Add(rec);
+            if (cindex > 0) {
+                // 5. Create new buffer record
+                BufferWindowRecord rec = new BufferWindowRecord() {
+                    M_StartBytePosition = bPosition,
+                    M_EndBytePosition = bPosition + bindex - 1,
+                    M_StartCharacterIndex = cPosition,
+                    M_EndCharacterIndex = cPosition + cindex - 1,
+                    M_WindowSize = cindex,
+                    M_CharEncodePos = m_charEncodePos,
+                    M_CharEncodeLength = m_charEncodeLength,
+                    M_DataBuffer = m_dataBuffer
+                };
+                m_bufferWindows.Add(rec);
 
-            m_bufferStart = rec.M_StartCharacterIndex;
+                m_bufferStart = rec.M_StartCharacterIndex;
 
-            Console.WriteLine(m_dataBuffer);
+                Console.WriteLine(m_dataBuffer);
+                return 0;
+            }
+            else {
+                return -1;
+            }
         }
 
         public Encoding GetEncoding() {
@@ -561,13 +579,13 @@ namespace SeekableStreamReader {
             sStreamReader.CloseStream();
             BufferedStreamTextReader bStreamReader = new BufferedStreamTextReader(new FileStream("test.txt",
                 FileMode.Open),128,Encoding.UTF8);
-            bStreamReader.ReadDataIntoBuffer(0);
-            while ((ccode= bStreamReader.NextChar()) != 0) {
+            bStreamReader.ReadDataIntoBuffer(0,0);
+            while ((ccode= bStreamReader.NextChar()) != -1) {
                 Console.Write((char)ccode);
             }
-            Console.WriteLine(bStreamReader[2]);
+            /*Console.WriteLine(bStreamReader[2]);
             Console.WriteLine(bStreamReader[200]);
-            Console.WriteLine(bStreamReader[2]);
+            Console.WriteLine(bStreamReader[2]);*/
 
         }
     }
