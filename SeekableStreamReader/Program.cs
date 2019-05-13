@@ -225,6 +225,11 @@ namespace SeekableStreamReader {
         public int LookAhead() {
             return this[m_streamPointer];
         }
+
+
+        public int GoBackwards() {
+            return this[--m_streamPointer];
+        }
         
         /// <summary>
         /// Checks if the character index exists in the buffer
@@ -271,18 +276,24 @@ namespace SeekableStreamReader {
         /// <param name="index">Index of character to access</param>
         protected int WhereToReadNextInStream(int index) {
             int EOFreached=0;
-            if (index > m_bufferWindows.Last().M_EndCharacterIndex) {
-                while ( !m_bufferWindows.Last().IsCharIndexInRange(index) && !(EOFreached== -1)) {
-                    EOFreached = ReadDataIntoBuffer(m_bufferWindows.Last().M_EndBytePosition + 1,m_bufferWindows.Last().M_EndCharacterIndex+1);
-                }
-            }
-            else if ( index < m_bufferWindows.Last().M_StartCharacterIndex) {
-                foreach (BufferWindowRecord record in Enumerable.Reverse(m_bufferWindows)) {
-                    if (record.IsCharIndexInRange(index)) {
-                        ReadDataIntoBuffer(record.M_StartBytePosition,record.M_StartCharacterIndex);
-                        break;
+            if (m_bufferWindows.Count != 0) {
+                if (index > m_bufferWindows.Last().M_EndCharacterIndex) {
+                    while (!m_bufferWindows.Last().IsCharIndexInRange(index) && !(EOFreached == -1)) {
+                        EOFreached = ReadDataIntoBuffer(m_bufferWindows.Last().M_EndBytePosition + 1,
+                            m_bufferWindows.Last().M_EndCharacterIndex + 1);
                     }
                 }
+                else if (index < m_bufferWindows.Last().M_StartCharacterIndex) {
+                    foreach (BufferWindowRecord record in Enumerable.Reverse(m_bufferWindows)) {
+                        if (record.IsCharIndexInRange(index)) {
+                            ReadDataIntoBuffer(record.M_StartBytePosition, record.M_StartCharacterIndex);
+                            break;
+                        }
+                    }
+                }
+            }
+            else {
+                ReadDataIntoBuffer(0, 0);
             }
 
             return EOFreached;
@@ -302,13 +313,13 @@ namespace SeekableStreamReader {
         /// position measured in bytes and in characters. The returned value
         /// indicates whether the file end is reached
         /// </summary>
-        public int ReadDataIntoBuffer(int bPosition,int cPosition) {
+        protected int ReadDataIntoBuffer(int bPosition,int cPosition) {
             int i_bufsz;
-            int bstart;
-            int bindex; // Holds the index of the last byte retrieved
-            int cindex; // discovered character index in sequence
-            int charactersDecoded;
-            int bt;
+            int bstart; // Holds the index of the first byte of the next character in the stream
+            int bindex; // Holds the stream index of the last byte retrieved in the current buffer
+            int cindex; // Holds the index of the last character retrieved in the current buffer
+            int charactersDecoded; // Number of characters decoded from the last call to GetChars
+            int bt; // Retrieved byte code from the stream
             byte[] byteBuffer = new byte[1];
             char[] charBuffer = new char[1];
 
@@ -349,7 +360,7 @@ namespace SeekableStreamReader {
                 // 5. Create new buffer record
                 BufferWindowRecord rec = new BufferWindowRecord() {
                     M_StartBytePosition = bPosition,
-                    M_EndBytePosition = bPosition + bindex - 1,
+                    M_EndBytePosition = bindex - 1,
                     M_StartCharacterIndex = cPosition,
                     M_EndCharacterIndex = cPosition + cindex - 1,
                     M_WindowSize = cindex,
@@ -361,7 +372,6 @@ namespace SeekableStreamReader {
 
                 m_bufferStart = rec.M_StartCharacterIndex;
 
-                Console.WriteLine(m_dataBuffer);
                 return 0;
             }
             else {
@@ -386,203 +396,28 @@ namespace SeekableStreamReader {
 
 
     }
-
-
-    // This class wraps a text stream-subclass object which does not support
-    // seeking and offers seeking ability taking into account the text encoding
-    public class SeekableStreamTextReader {
-        /// <summary>
-        /// The input stream for which seeking ability will be given
-        /// </summary>
-        private Stream m_istream;
-
-        /// <summary>
-        ///  The unicode character encoding requires not a fixed number of
-        ///  bytes for each character
-        ///  The array holds the bytes required to encoded each character
-        ///  in sequence in the input stream. The i-th entry gives the number
-        ///  of bytes to encode the i-th character. 
-        /// </summary>
-        private int[] m_charEncodeLength;
-
-        /// <summary>
-        /// The array holds the position in the input stream for which each
-        /// character starts its encoding. The i-th entry of the array gives
-        /// the position in the byte stream for which the i-th character starts
-        /// </summary>
-        private int[] m_charEncodePos;
-
-        /// <summary>
-        /// Holds the decoded text from the last decoding processing
-        /// </summary>
-        private StringBuilder m_decodedText;
-
-        /// <summary>
-        /// Holds the input stream encoding
-        /// </summary>
-        private Encoding m_streamEncoding;
-
-        /// <summary>
-        /// Indicates whether the underlying stream has been mapped with the
-        /// current encoding. If not, a call to MapStream method will preeced
-        /// a call to a stream accessor method
-        /// </summary>
-        private Boolean m_mappingAknowledge = false;
-
-
-        /// <summary>
-        /// Provides access to the current stream encoding 
-        /// </summary>
-        public Encoding M_StreamEncoding {
-            get => m_streamEncoding;
-            set {
-                m_streamEncoding = value;
-                m_mappingAknowledge = false;
-            }
-        }
-
-        public SeekableStreamTextReader(Stream mIstream, Encoding mStreamEncoding = null) {
-            m_istream = mIstream;
-            m_streamEncoding = mStreamEncoding != null ? mStreamEncoding : GetEncoding();
-            m_mappingAknowledge = false;
-        }
-
-        /// <summary>
-        /// Provides random access to the stream using an index. The index
-        /// refer to the index of character in sequence in the stream
-        /// </summary>
-        /// <param name="index">Character index in the stream</param>
-        /// <returns></returns>
-        public char this[int index] {
-            get {
-                if (!m_mappingAknowledge) {
-                    MapWholeStream();
-                }
-                Decoder decoder = m_streamEncoding.GetDecoder();
-                byte[] byteBuffer = new byte[m_charEncodeLength[index]];
-                char[] charBuffer = new char[1];
-                Seek(m_charEncodePos[index]);
-
-                m_istream.Read(byteBuffer, 0, m_charEncodeLength[index]);
-                decoder.GetChars(byteBuffer, 0, byteBuffer.Length, charBuffer, 0);
-                return charBuffer[0];
-            }
-        }
-
-        /// <summary>
-        /// This method sets the file pointer to the index-th byte in sequence
-        /// </summary>
-        /// <param name="index"></param>
-        protected void Seek(int index) {
-            m_istream.Seek(index, SeekOrigin.Begin);
-            m_istream.Flush();
-        }
-
-        /// <summary>
-        /// Set the file pointer to the character specified by the index parameter
-        /// </summary>
-        /// <param name="index">The index of character</param>
-        public void SeekChar(int index) {
-            if (!m_mappingAknowledge) {
-                MapWholeStream();
-            }
-            m_istream.Seek(m_charEncodePos[index], SeekOrigin.Begin);
-            m_istream.Flush();
-        }
-
-        public int CharacterEncodingPosition(int index) {
-            if (!m_mappingAknowledge) {
-                MapWholeStream();
-            }
-            return m_charEncodePos[index];
-        }
-
-        public int CharacterEncodingLength(int index) {
-            if (!m_mappingAknowledge) {
-                MapWholeStream();
-            }
-            return m_charEncodeLength[index];
-        }
-
-        /// <summary>
-        /// Closes the stream
-        /// </summary>
-        public void CloseStream() {
-            m_istream.Close();
-        }
-
-        public void MapWholeStream() {
-            // Required declarations to use the .NET API
-            int mb, bstart;
-            int bindex; // Holds the index of the last byte retrieved
-            int cindex; // discovered character index in sequence
-            int charactersDecoded;
-            byte[] byteBuffer = new byte[1];
-            char[] charBuffer = new char[1];
-
-            // Initializations
-            m_decodedText = new StringBuilder();
-
-            // Get an encoder for the given encoding
-            Decoder decoder = m_streamEncoding.GetDecoder();
-
-            // Read the whole stream byte-by-byte and decode it using the
-            // the given encoder. You have to reset the stream first
-            m_istream.Position = 0;
-            m_istream.Flush();
-            bstart = bindex = 0;
-            cindex = 0;
-            m_charEncodeLength = new int[m_istream.Length];
-            m_charEncodePos = new int[m_istream.Length];
-            while ((mb = m_istream.ReadByte()) != -1) {
-                byteBuffer[0] = (byte)mb;
-                // Decoder.GetChars holds state between consecutive invocations thus for every byte
-                // it is fed it considers previous bytes that haven't yet being decoded 
-                charactersDecoded = decoder.GetChars(byteBuffer, 0, 1, charBuffer, 0);
-                if (charactersDecoded != 0) {
-                    m_charEncodePos[cindex] = bstart;   // record current character start
-                    m_charEncodeLength[cindex] = bindex - bstart + 1; // record current character length
-                    cindex++;            // Increase characters discovered
-                    bstart = bindex + 1; // Next character starts at the next byte position
-
-                    m_decodedText.Append(charBuffer[0]); // Append the last decoded character to the decoded result
-                }
-                bindex++; // Point to the next byte in sequence
-            }
-
-            m_mappingAknowledge = true;
-            Console.WriteLine(m_decodedText);
-        }
-
-
-        public Encoding GetEncoding() {
-            // Read the BOM
-            var bom = new byte[4];
-            m_istream.Read(bom, 0, 4);
-
-            // Analyze the BOM
-            if (bom[0] == 0x2b && bom[1] == 0x2f && bom[2] == 0x76) return Encoding.UTF7;
-            if (bom[0] == 0xef && bom[1] == 0xbb && bom[2] == 0xbf) return Encoding.UTF8;
-            if (bom[0] == 0xff && bom[1] == 0xfe) return Encoding.Unicode; //UTF-16LE
-            if (bom[0] == 0xfe && bom[1] == 0xff) return Encoding.BigEndianUnicode; //UTF-16BE
-            if (bom[0] == 0 && bom[1] == 0 && bom[2] == 0xfe && bom[3] == 0xff) return Encoding.UTF32;
-            return Encoding.ASCII;
-        }
-    }
-
+    
     class Program {
         static void Main(string[] args) {
             int ccode;
             
-            SeekableStreamTextReader sStreamReader = new SeekableStreamTextReader(new FileStream("test.txt", 
-                FileMode.Open), Encoding.UTF8);
-            sStreamReader.CloseStream();
             BufferedStreamTextReader bStreamReader = new BufferedStreamTextReader(new FileStream("test.txt",
                 FileMode.Open),128,Encoding.UTF8);
-            bStreamReader.ReadDataIntoBuffer(0,0);
-            while ((ccode= bStreamReader.NextChar()) != -1) {
+            int i = 0;
+            while ((ccode= bStreamReader.NextChar()) != -1 && i < 200 ) {
                 Console.Write((char)ccode);
+                i++;
             }
+
+            while ( i > -1) {
+                ccode = bStreamReader.GoBackwards();
+                Console.Write((char)ccode);
+                i--;
+            }
+
+
+
+
             /*Console.WriteLine(bStreamReader[2]);
             Console.WriteLine(bStreamReader[200]);
             Console.WriteLine(bStreamReader[2]);*/
