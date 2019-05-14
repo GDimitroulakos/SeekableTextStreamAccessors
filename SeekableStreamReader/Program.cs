@@ -201,6 +201,12 @@ namespace SeekableStreamReader {
             }
         }
 
+        public int M_Length {
+            get {
+                return (int) m_istream.Length;
+            }
+        }
+
         public BufferedStreamTextReader(Stream mIstream, int bufferSize = 4096, Encoding mStreamEncoding = null) {
             m_istream = mIstream;
             m_streamEncoding = mStreamEncoding != null ? mStreamEncoding : GetEncoding();
@@ -228,9 +234,10 @@ namespace SeekableStreamReader {
 
 
         public int GoBackwards() {
-            return this[--m_streamPointer];
+            m_streamPointer = m_streamPointer-2   ;
+            return m_streamPointer<0 ? 0 : this[m_streamPointer++];
         }
-        
+
         /// <summary>
         /// Checks if the character index exists in the buffer
         /// </summary>
@@ -392,9 +399,6 @@ namespace SeekableStreamReader {
             if (bom[0] == 0 && bom[1] == 0 && bom[2] == 0xfe && bom[3] == 0xff) return Encoding.UTF32;
             return Encoding.ASCII;
         }
-
-
-
     }
     
     class Program {
@@ -404,24 +408,18 @@ namespace SeekableStreamReader {
             BufferedStreamTextReader bStreamReader = new BufferedStreamTextReader(new FileStream("test.txt",
                 FileMode.Open),128,Encoding.UTF8);
             int i = 0;
-            while ((ccode= bStreamReader.NextChar()) != -1 && i < 200 ) {
-                Console.Write((char)ccode);
-                i++;
+            while ((ccode= bStreamReader.NextChar()) != 0  ) {
+                Console.Write(ccode +" ");
             }
+            Console.WriteLine();
 
-            while ( i > -1) {
-                ccode = bStreamReader.GoBackwards();
-                Console.Write((char)ccode);
-                i--;
+            while ( (ccode = bStreamReader.GoBackwards()) !=0) {
+                Console.Write(ccode +" ");
             }
-
-
-
-
+            
             /*Console.WriteLine(bStreamReader[2]);
             Console.WriteLine(bStreamReader[200]);
             Console.WriteLine(bStreamReader[2]);*/
-
         }
     }
 }
