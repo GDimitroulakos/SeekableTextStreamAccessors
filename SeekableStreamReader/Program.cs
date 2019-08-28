@@ -194,6 +194,10 @@ namespace SeekableStreamReader {
         /// </summary>
         private Boolean m_bufferReallocationRequired = false;
 
+        private Boolean m_EOF=false;
+
+        public Boolean M_EOF => m_EOF;
+
         /// <summary>
         /// Provides access to the current stream encoding 
         /// </summary>
@@ -275,15 +279,12 @@ namespace SeekableStreamReader {
         public int LookAhead() {
             return this[m_streamPointer];
         }
-
-
+        
         public int GoBackwards() {
             m_streamPointer = m_streamPointer - 2;
             return m_streamPointer < 0 ? 0 : this[m_streamPointer++];
         }
-
-
-
+               
         /// <summary>
         /// Provides random access to the stream using an index. The index
         /// refer to the index of character in sequence in the stream
@@ -298,9 +299,11 @@ namespace SeekableStreamReader {
                 }
 
                 if (EOF != -1) {
+                    m_EOF = false;
                     return (int)(m_dataBuffer[index - m_bufferStart]);
                 }
                 else {
+                    m_EOF = true;
                     return EOF;
                 }
             }
@@ -343,6 +346,11 @@ namespace SeekableStreamReader {
                         m_bufferWindows.Last().M_EndCharacterIndex + 1);
                 }
             }
+
+            if ( EOFreached == -1) {
+                m_EOF = true;
+            }
+
             return EOFreached;
         }
 
@@ -376,7 +384,9 @@ namespace SeekableStreamReader {
                 }
             }
 
-
+            if (EOFreached == -1) {
+                m_EOF = true;
+            }
 
             return EOFreached;
         }
@@ -387,21 +397,29 @@ namespace SeekableStreamReader {
         protected void ResetBuffers() {
             ResetStreamPointer();
             m_bufferWindows.Clear();
-            m_bufferReallocationRequired = true;
+            m_bufferReallocationRequired = true;           
         }
 
         /// <summary>
         /// This method sets the file pointer to the index-th character in sequence
         /// </summary>
         /// <param name="index"></param>
-        public void SeekChar(int index) {
+        /// <returns></returns>
+        public int SeekChar(int index) {
             int EOF = 0;
             if (!m_bufferReallocationRequired || !CharacterIndexInBuffer(index)) {
                 EOF = WhereToReadNextCharInStream(index);
             }
-            m_istream.Seek(m_charEncodePos[index], SeekOrigin.Begin);
-            m_istream.Flush();
-            m_streamPointer = m_charEncodePos[index];
+            if (EOF != -1) {
+                m_istream.Seek(m_charEncodePos[index], SeekOrigin.Begin);
+                m_istream.Flush();
+                m_streamPointer = m_charEncodePos[index];
+                m_EOF = false;
+            }
+            else {
+                m_EOF = true;
+            }
+            return EOF;
         }
 
         /// <summary>
