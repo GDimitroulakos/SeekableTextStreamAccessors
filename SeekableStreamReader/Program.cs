@@ -451,7 +451,7 @@ namespace SeekableStreamReader {
             m_istream.Seek(bPosition, SeekOrigin.Begin);
             m_istream.Flush();
 
-            // 3. Allocate space for the buffer if necessary
+            // 3. Allocate space for the buffer 
             m_dataBuffer = new char[m_bufferSize];
             m_charEncodePos = new int[m_bufferSize];
             m_charEncodeLength = new int[m_bufferSize];
@@ -496,6 +496,7 @@ namespace SeekableStreamReader {
                 return 0;
             }
             else {
+                // cindex ==0 nothing was read from the file because EOF is reached
                 return -1;
             }
         }
