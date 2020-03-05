@@ -9,6 +9,10 @@ using System.Threading.Tasks;
 
 namespace SeekableStreamReader {
 
+    public class TextSpanRecord {
+
+    }
+
     public class BufferWindowRecord {
         /// <summary>
         /// Index of first window byte in the underlying stream
@@ -98,29 +102,6 @@ namespace SeekableStreamReader {
         public bool IsCharIndexInRange(int index) {
             return ((index >= m_startCharacterIndex && index <= m_endCharacterIndex) ? true : false);
         }
-    }
-
-    public class BufferStreamTextReaderEnum : IEnumerator<int> {
-        private BufferedStreamTextReader m_stream;
-        public int Current { get; }
-
-        public BufferStreamTextReaderEnum(BufferedStreamTextReader stream) {
-            m_stream = stream;
-        }
-
-        public void Dispose() {
-            throw new NotImplementedException();
-        }
-
-        public bool MoveNext() {
-            throw new NotImplementedException();
-        }
-
-        public void Reset() {
-            throw new NotImplementedException();
-        }
-
-        object IEnumerator.Current => Current;
     }
 
     /// <summary>
