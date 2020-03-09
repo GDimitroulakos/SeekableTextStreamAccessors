@@ -9,8 +9,73 @@ using System.Threading.Tasks;
 
 namespace SeekableStreamReader {
 
-    public class TextSpanRecord {
+    public class TextSizeRecord {
+        private int m_lineSize=-1;
+        private int m_columnSize=-1;
 
+        public int M_LineSize {
+            get => m_lineSize;
+            set => m_lineSize = value;
+        }
+
+        public int M_ColumnSize {
+            get => m_columnSize;
+            set => m_columnSize = value;
+        }
+    }
+
+    public class TextPosition {
+        private int m_line=-1;
+        private int m_column=-1;
+
+        public int M_Line {
+            get => m_line;
+            set => m_line = value;
+        }
+
+        public int M_Column {
+            get => m_column;
+            set => m_column = value;
+        }
+    }
+
+    public class TextSpanRecord {
+        private TextPosition m_startPosition = new TextPosition();
+        private TextPosition m_endPosition = new TextPosition();
+        TextSizeRecord m_size = new TextSizeRecord();
+
+        public int M_LineStart {
+            get => m_startPosition.M_Line;
+            set {
+                m_startPosition.M_Line = value;
+                m_size.M_LineSize = m_endPosition.M_Line - m_startPosition.M_Line + 1;
+            }
+        }
+
+        public int M_LineEnd {
+            get => m_endPosition.M_Line;
+            set {
+                m_endPosition.M_Line = value;
+                m_size.M_LineSize = m_endPosition.M_Line - m_startPosition.M_Line + 1;
+            }
+        }
+
+        public int M_ColumnStart {
+            get => m_startPosition.M_Column;
+            set {
+                m_startPosition.M_Column = value;
+                m_size.M_ColumnSize = m_endPosition.M_Column - m_startPosition.M_Column;
+            }
+        }
+
+        public int M_ColumnEnd {
+            get => m_endPosition.M_Column;
+            set {
+                m_endPosition.M_Column = value;
+                m_size.M_ColumnSize = m_endPosition.M_Column - m_startPosition.M_Column;
+            }
+        }
+        public TextSizeRecord M_Size => m_size;
     }
 
     public class BufferWindowRecord {
@@ -31,9 +96,10 @@ namespace SeekableStreamReader {
         /// </summary>
         private int m_endCharacterIndex;
         /// <summary>
-        /// Window Size in characters
+        /// Actrual window Size in characters.
         /// </summary>
         private int m_windowSize;
+       
         /// <summary>
         ///  The unicode character encoding requires not a fixed number of
         ///  bytes for each character
@@ -49,6 +115,13 @@ namespace SeekableStreamReader {
         /// the position in the byte stream for which the i-th character starts
         /// </summary>
         private int[] m_charEncodePos;
+
+        /// <summary>
+        /// The array holds the position in a text document for which each
+        /// character starts its encoding. The i-th entry of the array gives
+        /// the position in the byte stream for which the i-th character starts
+        /// </summary>
+        private TextPosition[] m_charTextPos;
 
         /// <summary>
         /// Holds the data in character form
@@ -90,11 +163,16 @@ namespace SeekableStreamReader {
             get => m_charEncodePos;
             set => m_charEncodePos = value;
         }
+        public TextPosition[] M_CharTextPos {
+            get => m_charTextPos;
+            set => m_charTextPos = value;
+        }
+
         public char[] M_DataBuffer {
             get => m_dataBuffer;
             set => m_dataBuffer = value;
         }
-
+        
         public bool IsByteIndexInRange(int index) {
             return (index >= m_startBytePosition && index <= m_endBytePosition) ? true : false;
         }
@@ -158,6 +236,8 @@ namespace SeekableStreamReader {
         /// the position in the byte stream for which the i-th character starts
         /// </summary>
         private int[] m_charEncodePos;
+
+        private TextPosition[] m_charTextPositions;
 
         /// <summary>
         /// Holds the decoded text from the last decoding processing
@@ -435,6 +515,7 @@ namespace SeekableStreamReader {
             // 3. Allocate space for the buffer 
             m_dataBuffer = new char[m_bufferSize];
             m_charEncodePos = new int[m_bufferSize];
+            m_charTextPositions = new TextPosition[m_bufferSize];
             m_charEncodeLength = new int[m_bufferSize];
 
             // 4. Read the stream while buffer is full and end of file is not reached
@@ -447,6 +528,39 @@ namespace SeekableStreamReader {
                 charactersDecoded = decoder.GetChars(byteBuffer, 0, 1, charBuffer, 0); // decode
                 if (charactersDecoded != 0) {
                     m_charEncodePos[cindex] = bstart;   // record current character start
+                    m_charTextPositions[cindex] = new TextPosition();
+                    if (cindex > 0) {
+                        switch (m_dataBuffer[cindex - 1]) {
+                            case '\n':
+                                m_charTextPositions[cindex].M_Line = m_charTextPositions[cindex - 1].M_Line + 1;
+                                m_charTextPositions[cindex].M_Column = 0;
+                                break;
+                            default:
+                                m_charTextPositions[cindex].M_Line = m_charTextPositions[cindex - 1].M_Line;
+                                m_charTextPositions[cindex].M_Column = m_charTextPositions[cindex].M_Column + 1;
+                                break;
+                        }
+                    }
+                    else {
+                        if (m_bufferWindows.Count > 0) {
+                            switch (m_dataBuffer[
+                                m_bufferWindows.Last().M_DataBuffer[m_bufferWindows.Last().M_WindowSize - 1]]) {
+                                case '\n':
+                                    m_charTextPositions[cindex].M_Line = m_bufferWindows.Last().M_CharTextPos[m_bufferWindows.Last().M_WindowSize - 1].M_Line + 1;
+                                    m_charTextPositions[cindex].M_Column = 0;
+                                    break;
+                                default:
+                                    m_charTextPositions[cindex].M_Line = m_bufferWindows.Last().M_CharTextPos[m_bufferWindows.Last().M_WindowSize - 1].M_Line;
+                                    m_charTextPositions[cindex].M_Column = m_bufferWindows.Last().M_CharTextPos[m_bufferWindows.Last().M_WindowSize - 1].M_Column + 1;
+                                    break;
+                            }
+                        }
+                        else {
+                            m_charTextPositions[cindex].M_Line = 1;
+                            m_charTextPositions[cindex].M_Column = 0;
+                        }
+                    }
+
                     m_charEncodeLength[cindex] = bindex - bstart + 1; // record current character length
                     bstart = bindex + 1; // Next character starts at the next byte position
 
@@ -466,6 +580,7 @@ namespace SeekableStreamReader {
                     M_EndCharacterIndex = cPosition + cindex - 1,
                     M_WindowSize = cindex,
                     M_CharEncodePos = m_charEncodePos,
+                    M_CharTextPos = m_charTextPositions,
                     M_CharEncodeLength = m_charEncodeLength,
                     M_DataBuffer = m_dataBuffer
                 };
