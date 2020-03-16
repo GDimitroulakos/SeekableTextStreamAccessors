@@ -129,6 +129,15 @@ namespace SeekableStreamReader {
         /// </summary>
         private char[] m_dataBuffer;
 
+        /// <summary>
+        /// Indicates whether this window contains the last part of the stream
+        /// </summary>
+        private bool m_EOF;
+
+        public bool M_EOF {
+            get => m_EOF;
+            set => m_EOF = value;
+        }
 
         public int M_StartBytePosition {
             get => m_startBytePosition;
@@ -192,6 +201,9 @@ namespace SeekableStreamReader {
         /// </summary>
         private List<BufferWindowRecord> m_bufferWindows = new List<BufferWindowRecord>();
 
+        /// <summary>
+        /// Current pointed buffer from which we retreive data
+        /// </summary>
         private BufferWindowRecord m_currentBuffer;
 
         /// <summary>
@@ -200,50 +212,14 @@ namespace SeekableStreamReader {
         private Stream m_istream;
 
         /// <summary>
-        /// Holds the data in character form. Always points to the
-        /// current character buffer of the last decoded window 
-        /// </summary>
-        private char[] m_dataBuffer;
-
-        /// <summary>
         /// Buffer window size in characters
         /// </summary>
         private int m_bufferSize;
 
         /// <summary>
-        /// Character Position in input stream where buffering starts. Always refers
-        /// to the current character buffer.
-        /// </summary>
-        private int m_bufferStart = 0;
-
-
-        /// <summary>
         /// Pointer to stream data. Points to the next character to be retrieved
         /// </summary>
         private int m_streamPointer = 0;
-
-        /// <summary>
-        ///  The unicode character encoding requires not a fixed number of
-        ///  bytes for each character
-        ///  The array holds the bytes required to encoded each character
-        ///  in sequence in the input stream. The i-th entry gives the number
-        ///  of bytes to encode the i-th character. 
-        /// </summary>
-        private int[] m_charEncodeLength;
-
-        /// <summary>
-        /// The array holds the position in the input stream for which each
-        /// character starts its encoding. The i-th entry of the array gives
-        /// the position in the byte stream for which the i-th character starts
-        /// </summary>
-        private int[] m_charEncodePos;
-
-        private TextPosition[] m_charTextPositions;
-
-        /// <summary>
-        /// Holds the decoded text from the last decoding processing
-        /// </summary>
-        private StringBuilder m_decodedText;
 
         /// <summary>
         /// Holds the input stream encoding
@@ -254,11 +230,7 @@ namespace SeekableStreamReader {
         /// Indicates whether the buffered data are valid or decoding the input
         /// stream is required
         /// </summary>
-        private Boolean m_bufferReallocationRequired = false;
-
-        private Boolean m_EOF = false;
-
-        public Boolean M_EOF => m_EOF;
+        private Boolean m_bufferDataValidity = false;
 
         /// <summary>
         /// Provides access to the current stream encoding 
@@ -299,8 +271,11 @@ namespace SeekableStreamReader {
         /// <param name="index"></param>
         /// <returns></returns>
         bool CharacterIndexInBuffer(int index) {
-            if (index >= m_bufferStart && index < m_bufferStart + m_bufferSize) {
-                return true;
+            if (m_currentBuffer != null) {
+                if (index >= m_currentBuffer.M_StartCharacterIndex &&
+                    index < m_currentBuffer.M_StartCharacterIndex + m_bufferSize) {
+                    return true;
+                }
             }
             return false;
         }
@@ -311,7 +286,7 @@ namespace SeekableStreamReader {
         /// <param name="index"></param>
         /// <returns></returns>
         bool ByteIndexInBuffer(int index) {
-            if (index >= m_bufferStart && index < m_bufferStart + m_bufferSize) {
+            if (index >= m_currentBuffer.M_StartCharacterIndex && index < m_currentBuffer.M_StartCharacterIndex + m_bufferSize) {
                 return true;
             }
             return false;
@@ -331,6 +306,22 @@ namespace SeekableStreamReader {
         /// <returns></returns>
         public int NextChar() {
             return this[m_streamPointer++];
+        }
+
+        public string GetLineRemainder() {
+            StringBuilder s = new StringBuilder();
+            int c;
+            if (LookAhead() != 0) {
+                c = NextChar();
+                while ( c != '\n' && c != -1) {
+                    s.Append((char)c);
+                    c = NextChar();
+                }
+            } else {
+                return "";
+            }
+
+            return s.ToString();
         }
 
         /// <summary>
@@ -355,17 +346,20 @@ namespace SeekableStreamReader {
         /// <returns>Returns the character Unicode value</returns>
         public int this[int index] {
             get {
-                int EOF = 0;
-                if (!m_bufferReallocationRequired || !CharacterIndexInBuffer(index)) {
-                    EOF = WhereToReadNextCharInStream(index);
+                
+                if (!CharacterIndexInBuffer(index) || !m_bufferDataValidity) {
+                    WhereToReadNextCharInStream(index);
                 }
 
-                if (EOF != -1) {
-                    m_EOF = false;
-                    return (int)(m_dataBuffer[index - m_bufferStart]);
+                if (m_currentBuffer != null) {
+                    if (index - m_currentBuffer.M_StartCharacterIndex < m_currentBuffer.M_WindowSize) {
+                        return (int)(m_currentBuffer.M_DataBuffer[index - m_currentBuffer.M_StartCharacterIndex]);
+                    }
+                    else {
+                        return -1;
+                    }
                 } else {
-                    m_EOF = true;
-                    return EOF;
+                    return -1;
                 }
             }
         }
@@ -374,46 +368,51 @@ namespace SeekableStreamReader {
         /// Given a character index in the stream the method identifies the
         /// segment in the stream where the requested character resides by
         /// either looking forward or in reverse. The returned value indicates
-        /// whether the end of file is reached
+        /// whether the requested index is past the end of the eof
         /// </summary>
         /// <param name="index">Index of character to access</param>
-        /// <returns>returns -1 when EOF is reached</returns> 
-        protected int WhereToReadNextCharInStream(int index) {
-            int EOFreached = 0;
+        /// <returns>returns null when the requested index is past the EOF and a reference
+        /// to the bufferwindow otherwise</returns> 
+        protected BufferWindowRecord WhereToReadNextCharInStream(int index) {
             if (m_bufferWindows.Count != 0) {
                 if (index > m_bufferWindows.Last().M_EndCharacterIndex) {
-                    while (!m_bufferWindows.Last().IsCharIndexInRange(index) && !(EOFreached == -1)) {
-                        EOFreached = ReadDataIntoBuffer(m_bufferWindows.Last().M_EndBytePosition + 1,
-                            m_bufferWindows.Last().M_EndCharacterIndex + 1);
+                    // If the index is ahead of what is fetched
+                    // Fetch text windows chunks from the stream until the chuck containing 
+                    // the index is reached or the eof is reached
+                    while (m_currentBuffer != null &&
+                           !m_bufferWindows.Last().IsCharIndexInRange(index) &&
+                           !m_bufferWindows.Last().M_EOF) {
+                        ReadDataIntoBuffer(m_bufferWindows.Last().M_EndBytePosition + 1,
+                           m_bufferWindows.Last().M_EndCharacterIndex + 1);
                     }
                 } else if (index < m_bufferWindows.Last().M_StartCharacterIndex) {
+                    // If the index is inside in any of the text windows chunks go inverse
+                    // to find the window containing the given index
                     foreach (BufferWindowRecord record in Enumerable.Reverse(m_bufferWindows)) {
                         if (record.IsCharIndexInRange(index)) {
-                            m_dataBuffer = record.M_DataBuffer;
-                            m_charEncodePos = record.M_CharEncodePos;
-                            m_charEncodeLength = record.M_CharEncodeLength;
                             m_currentBuffer = record;
-                            m_bufferStart = record.M_StartCharacterIndex;
                             break;
                         }
                     }
                 }
             } else {
                 ReadDataIntoBuffer(0, 0);
-                while (!m_bufferWindows.Last().IsCharIndexInRange(index) && !(EOFreached == -1)) {
-                    EOFreached = ReadDataIntoBuffer(m_bufferWindows.Last().M_EndBytePosition + 1,
-                        m_bufferWindows.Last().M_EndCharacterIndex + 1);
+                while (m_currentBuffer != null &&
+                       !m_bufferWindows.Last().IsCharIndexInRange(index) &&
+                       !m_bufferWindows.Last().M_EOF) {
+                    ReadDataIntoBuffer(m_bufferWindows.Last().M_EndBytePosition + 1,
+                       m_bufferWindows.Last().M_EndCharacterIndex + 1);
                 }
             }
 
-            if (EOFreached == -1) {
-                m_EOF = true;
+            if (m_currentBuffer == null || !m_currentBuffer.IsCharIndexInRange(index)) {
+                return null;
             }
 
-            return EOFreached;
+            return m_currentBuffer;
         }
 
-        protected int WhereToReadNextByteInStream(int index) {
+        /*protected int WhereToReadNextByteInStream(int index) {
             int EOFreached = 0;
             if (m_bufferWindows.Count != 0) {
                 if (index > m_bufferWindows.Last().M_EndBytePosition) {
@@ -424,11 +423,7 @@ namespace SeekableStreamReader {
                 } else if (index < m_bufferWindows.Last().M_StartBytePosition) {
                     foreach (BufferWindowRecord record in Enumerable.Reverse(m_bufferWindows)) {
                         if (record.IsByteIndexInRange(index)) {
-                            m_dataBuffer = record.M_DataBuffer;
-                            m_charEncodePos = record.M_CharEncodePos;
-                            m_charEncodeLength = record.M_CharEncodeLength;
                             m_currentBuffer = record;
-                            m_bufferStart = record.M_StartCharacterIndex;
                             break;
                         }
                     }
@@ -440,13 +435,8 @@ namespace SeekableStreamReader {
                         m_bufferWindows.Last().M_EndCharacterIndex + 1);
                 }
             }
-
-            if (EOFreached == -1) {
-                m_EOF = true;
-            }
-
             return EOFreached;
-        }
+        }*/
 
         /// <summary>
         /// Clears the buffers and resets the stream pointer
@@ -454,28 +444,38 @@ namespace SeekableStreamReader {
         protected void ResetBuffers() {
             ResetStreamPointer();
             m_bufferWindows.Clear();
-            m_bufferReallocationRequired = true;
+            m_bufferDataValidity = true;
         }
 
         /// <summary>
-        /// This method sets the file pointer to the index-th character in sequence
+        /// This method sets the file pointer to the index-th character in sequence. The
+        /// method converts the given character index to the index of the byte from where
+        /// the character begins its encoding 
         /// </summary>
-        /// <param name="index"></param>
-        /// <returns></returns>
+        /// <param name="index">index of the character in stream</param>
+        /// <returns>returns -1 if index is past the end of file or the indexed
+        /// character code otherwise</returns>
         public int SeekChar(int index) {
-            int EOF = 0;
-            if (!m_bufferReallocationRequired || !CharacterIndexInBuffer(index)) {
-                EOF = WhereToReadNextCharInStream(index);
+            // check if the current window holds valid data...
+            if (!m_bufferDataValidity || !CharacterIndexInBuffer(index)) {
+                //... if not fetch the appropriate window from the stream that
+                // includes the requested character
+                WhereToReadNextCharInStream(index);
             }
-            if (EOF != -1) {
-                m_istream.Seek(m_charEncodePos[index], SeekOrigin.Begin);
-                m_istream.Flush();
-                m_streamPointer = m_charEncodePos[index];
-                m_EOF = false;
+            // if WhereToReadNextCharInStream returns -1 this means that the index-th
+            // character is past the end of the stream otherwise 
+            if (m_currentBuffer != null) {
+                if (!CharacterIndexInBuffer(index)) {
+                    return -1;
+                } else {
+                    m_istream.Seek(m_currentBuffer.M_CharEncodePos[index], SeekOrigin.Begin);
+                    m_istream.Flush();
+                    m_streamPointer = m_currentBuffer.M_CharEncodePos[index];
+                    return m_currentBuffer.M_DataBuffer[index];
+                }
             } else {
-                m_EOF = true;
+                return -1;
             }
-            return EOF;
         }
 
         /// <summary>
@@ -488,15 +488,47 @@ namespace SeekableStreamReader {
         /// <summary>
         /// Reads and maps data into the buffer starting from the indicated
         /// position measured in bytes and in characters. The returned value
-        /// indicates whether the file end is reached
+        /// indicates whether the file end is reached resulting in no character
+        /// read or the buffer window read
         /// </summary>
-        protected int ReadDataIntoBuffer(int bPosition, int cPosition) {
+        protected BufferWindowRecord ReadDataIntoBuffer(int bPosition, int cPosition) {
+            /// <summary>
+            ///  The unicode character encoding requires not a fixed number of
+            ///  bytes for each character
+            ///  The array holds the bytes required to encoded each character
+            ///  in sequence in the input stream. The i-th entry gives the number
+            ///  of bytes to encode the i-th character. 
+            /// </summary>
+            int[] charEncodeLength;
+
+            /// <summary>
+            /// The array holds the position in the input stream for which each
+            /// character starts its encoding. The i-th entry of the array gives
+            /// the position in the byte stream for which the i-th character starts
+            /// </summary>
+            int[] charEncodePos;
+
+            /// <summary>
+            /// Holds the data in character form. Always points to the
+            /// current character buffer of the last decoded window 
+            /// </summary>
+            char[] dataBuffer;
+
+            TextPosition[] charTextPositions;
+
+            /// <summary>
+            /// Character Position in input stream where buffering starts. Always refers
+            /// to the current character buffer.
+            /// </summary>
+            int bufferStart = 0;
+
             int i_bufsz;
             int bstart; // Holds the index of the first byte of the next character in the stream
             int bindex; // Holds the stream index of the last byte retrieved in the current buffer
             int cindex; // Holds the index of the last character retrieved in the current buffer
             int charactersDecoded; // Number of characters decoded from the last call to GetChars
-            int bt; // Retrieved byte code from the stream
+            int bt = 0; // Retrieved byte code from the stream
+            bool islastWindow = false; // indicates whether the last character of the last windows is reached
             byte[] byteBuffer = new byte[1];
             char[] charBuffer = new char[1];
 
@@ -508,10 +540,10 @@ namespace SeekableStreamReader {
             m_istream.Flush();
 
             // 3. Allocate space for the buffer 
-            m_dataBuffer = new char[m_bufferSize];
-            m_charEncodePos = new int[m_bufferSize];
-            m_charTextPositions = new TextPosition[m_bufferSize];
-            m_charEncodeLength = new int[m_bufferSize];
+            dataBuffer = new char[m_bufferSize];
+            charEncodePos = new int[m_bufferSize];
+            charTextPositions = new TextPosition[m_bufferSize];
+            charEncodeLength = new int[m_bufferSize];
 
             // 4. Read the stream while buffer is full and end of file is not reached
             // Meanwhile decode the bytes to characters into the buffer
@@ -522,49 +554,54 @@ namespace SeekableStreamReader {
                 byteBuffer[0] = (byte)bt; // read the character code as integer and cast it to byte
                 charactersDecoded = decoder.GetChars(byteBuffer, 0, 1, charBuffer, 0); // decode
                 if (charactersDecoded != 0) {
-                    m_charEncodePos[cindex] = bstart;   // record current character start
-                    m_charTextPositions[cindex] = new TextPosition();
+                    charEncodePos[cindex] = bstart;   // record current character start
+                    charTextPositions[cindex] = new TextPosition();
                     if (cindex > 0) {
-                        switch (m_dataBuffer[cindex - 1]) {
+                        switch (dataBuffer[cindex - 1]) {
                             case '\n':
-                            m_charTextPositions[cindex].M_Line = m_charTextPositions[cindex - 1].M_Line + 1;
-                            m_charTextPositions[cindex].M_Column = 0;
+                            charTextPositions[cindex].M_Line = charTextPositions[cindex - 1].M_Line + 1;
+                            charTextPositions[cindex].M_Column = 0;
                             break;
                             default:
-                            m_charTextPositions[cindex].M_Line = m_charTextPositions[cindex - 1].M_Line;
-                            m_charTextPositions[cindex].M_Column = m_charTextPositions[cindex - 1].M_Column + 1;
+                            charTextPositions[cindex].M_Line = charTextPositions[cindex - 1].M_Line;
+                            charTextPositions[cindex].M_Column = charTextPositions[cindex - 1].M_Column + 1;
                             break;
                         }
                     } else {
                         if (m_bufferWindows.Count > 0) {
-                            switch (m_dataBuffer[
+                            switch (dataBuffer[
                                 m_bufferWindows.Last().M_DataBuffer[m_bufferWindows.Last().M_WindowSize - 1]]) {
                                 case '\n':
-                                m_charTextPositions[cindex].M_Line = m_bufferWindows.Last().M_CharTextPos[m_bufferWindows.Last().M_WindowSize - 1].M_Line + 1;
-                                m_charTextPositions[cindex].M_Column = 0;
+                                charTextPositions[cindex].M_Line = m_bufferWindows.Last().M_CharTextPos[m_bufferWindows.Last().M_WindowSize - 1].M_Line + 1;
+                                charTextPositions[cindex].M_Column = 0;
                                 break;
                                 default:
-                                m_charTextPositions[cindex].M_Line = m_bufferWindows.Last().M_CharTextPos[m_bufferWindows.Last().M_WindowSize - 1].M_Line;
-                                m_charTextPositions[cindex].M_Column = m_bufferWindows.Last().M_CharTextPos[m_bufferWindows.Last().M_WindowSize - 1].M_Column + 1;
+                                charTextPositions[cindex].M_Line = m_bufferWindows.Last().M_CharTextPos[m_bufferWindows.Last().M_WindowSize - 1].M_Line;
+                                charTextPositions[cindex].M_Column = m_bufferWindows.Last().M_CharTextPos[m_bufferWindows.Last().M_WindowSize - 1].M_Column + 1;
                                 break;
                             }
                         } else {
-                            m_charTextPositions[cindex].M_Line = 1;
-                            m_charTextPositions[cindex].M_Column = 0;
+                            charTextPositions[cindex].M_Line = 1;
+                            charTextPositions[cindex].M_Column = 0;
                         }
                     }
 
-                    m_charEncodeLength[cindex] = bindex - bstart + 1; // record current character length
+                    charEncodeLength[cindex] = bindex - bstart + 1; // record current character length
                     bstart = bindex + 1; // Next character starts at the next byte position
 
-                    m_dataBuffer[cindex++] = charBuffer[0]; // Transfer the decoded character into the buffer
+                    dataBuffer[cindex++] = charBuffer[0]; // Transfer the decoded character into the buffer
                 }
                 bindex++;
             }
 
-            m_bufferReallocationRequired = false;
+            if (bt == -1 || bindex == m_istream.Length) {
+                islastWindow = true;
+            }
+
+            m_bufferDataValidity = true;
 
             if (cindex > 0) {
+
                 // 5. Create new buffer record
                 BufferWindowRecord rec = new BufferWindowRecord() {
                     M_StartBytePosition = bPosition,
@@ -572,20 +609,20 @@ namespace SeekableStreamReader {
                     M_StartCharacterIndex = cPosition,
                     M_EndCharacterIndex = cPosition + cindex - 1,
                     M_WindowSize = cindex,
-                    M_CharEncodePos = m_charEncodePos,
-                    M_CharTextPos = m_charTextPositions,
-                    M_CharEncodeLength = m_charEncodeLength,
-                    M_DataBuffer = m_dataBuffer
+                    M_CharEncodePos = charEncodePos,
+                    M_CharTextPos = charTextPositions,
+                    M_CharEncodeLength = charEncodeLength,
+                    M_DataBuffer = dataBuffer,
+                    M_EOF = islastWindow
                 };
+
                 m_bufferWindows.Add(rec);
-
-                m_bufferStart = rec.M_StartCharacterIndex;
+                //bufferStart = rec.M_StartCharacterIndex;
                 m_currentBuffer = rec;
-
-                return 0;
+                return m_currentBuffer;
             } else {
                 // cindex ==0 nothing was read from the file because EOF is reached
-                return -1;
+                return null;
             }
         }
 
@@ -662,6 +699,7 @@ namespace SeekableStreamReader {
             int i = 0;
             while ((ccode = bStreamReader.NextChar()) != -1) {
                 Console.Write(ccode + " ");
+                i++;
             }
             Console.WriteLine();
 
@@ -670,6 +708,12 @@ namespace SeekableStreamReader {
             }
             dbg.WriteLine(bStreamReader.ToString());
             dbg.Close();
+
+            bStreamReader.SeekChar(0);
+            string s;
+            while ((s = bStreamReader.GetLineRemainder()) != "") {
+                Console.WriteLine(s);
+            }
 
             /*Console.WriteLine(bStreamReader[2]);
             Console.WriteLine(bStreamReader[200]);
