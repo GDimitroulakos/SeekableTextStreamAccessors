@@ -233,6 +233,13 @@ namespace SeekableStreamReader {
         private Boolean m_bufferDataValidity = false;
 
         /// <summary>
+        /// Indicates that the stream pointer is past the end of file
+        /// </summary>
+        private bool m_EOF=false;
+
+        public bool M_EOF => m_EOF;
+
+        /// <summary>
         /// Provides access to the current stream encoding 
         /// </summary>
         public Encoding M_StreamEncoding {
@@ -253,6 +260,19 @@ namespace SeekableStreamReader {
                     ResetBuffers();
                 }
 
+            }
+        }
+
+        public int M_StreamPointer {
+            get => m_streamPointer;
+            set {
+                m_streamPointer = value;
+                if (LookAhead() == '\0') {
+                    m_EOF = true;
+                }
+                else {
+                    m_EOF = false;
+                }
             }
         }
 
@@ -305,7 +325,7 @@ namespace SeekableStreamReader {
         /// </summary>
         /// <returns></returns>
         public int NextChar() {
-            return this[m_streamPointer++];
+            return this[M_StreamPointer++];
         }
 
         public string GetLineRemainder() {
@@ -330,12 +350,12 @@ namespace SeekableStreamReader {
         /// </summary>
         /// <returns></returns>
         public int LookAhead() {
-            return this[m_streamPointer];
+            return this[M_StreamPointer];
         }
 
         public int GoBackwards() {
-            m_streamPointer = m_streamPointer - 2;
-            return m_streamPointer < 0 ? 0 : this[m_streamPointer++];
+            M_StreamPointer = M_StreamPointer - 2;
+            return M_StreamPointer < 0 ? 0 : this[M_StreamPointer++];
         }
 
         /// <summary>
@@ -470,7 +490,7 @@ namespace SeekableStreamReader {
                 } else {
                     m_istream.Seek(m_currentBuffer.M_CharEncodePos[index], SeekOrigin.Begin);
                     m_istream.Flush();
-                    m_streamPointer = m_currentBuffer.M_CharEncodePos[index];
+                    M_StreamPointer = m_currentBuffer.M_CharEncodePos[index];
                     return m_currentBuffer.M_DataBuffer[index];
                 }
             } else {
